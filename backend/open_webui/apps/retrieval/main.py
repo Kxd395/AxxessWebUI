@@ -887,15 +887,27 @@ def process_file(
             # Usage: /files/
             file_path = file.path
             if file_path:
-                file_path = Storage.get_file(file_path)
-                loader = Loader(
-                    engine=app.state.config.CONTENT_EXTRACTION_ENGINE,
-                    TIKA_SERVER_URL=app.state.config.TIKA_SERVER_URL,
-                    PDF_EXTRACT_IMAGES=app.state.config.PDF_EXTRACT_IMAGES,
-                )
-                docs = loader.load(
-                    file.filename, file.meta.get("content_type"), file_path
-                )
+                with Storage.as_local_file(file_path) as local_file_path:
+                    loader = Loader(
+                        engine=app.state.config.CONTENT_EXTRACTION_ENGINE,
+                        TIKA_SERVER_URL=app.state.config.TIKA_SERVER_URL,
+                        PDF_EXTRACT_IMAGES=app.state.config.PDF_EXTRACT_IMAGES,
+                    )
+                    loaded_docs = loader.load(
+                        file.filename, file.meta.get("content_type"), local_file_path
+                    )
+
+                    docs = [
+                        Document(
+                            page_content=doc.page_content,
+                            metadata = {
+                                "name": file.meta.get("name", file.filename),
+                                "created_by": file.user_id,
+                                "file_id": file.id,
+                                **file.meta,
+                            }
+                        )
+                        for doc in loaded_docs]
             else:
                 docs = [
                     Document(

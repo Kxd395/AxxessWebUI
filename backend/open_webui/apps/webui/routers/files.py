@@ -16,7 +16,7 @@ from open_webui.apps.webui.models.files import (
 )
 from open_webui.apps.retrieval.main import process_file, ProcessFileForm
 
-from open_webui.config import UPLOAD_DIR
+from open_webui.config import USER_UPLOAD_FOLDER
 from open_webui.env import SRC_LOG_LEVELS
 from open_webui.constants import ERROR_MESSAGES
 
@@ -40,7 +40,6 @@ router = APIRouter()
 
 @router.post("/", response_model=FileModelResponse)
 def upload_file(file: UploadFile = File(...), user=Depends(get_verified_user)):
-    log.info(f"file.content_type: {file.content_type}")
     try:
         unsanitized_filename = file.filename
         filename = os.path.basename(unsanitized_filename)
@@ -48,7 +47,7 @@ def upload_file(file: UploadFile = File(...), user=Depends(get_verified_user)):
         # replace filename with uuid
         id = str(uuid.uuid4())
         name = filename
-        filename = f"{id}_{filename}"
+        filename = f"{USER_UPLOAD_FOLDER}/{user.id}/{id}_{filename}"
         contents, file_path = Storage.upload_file(file.file, filename)
 
         file_item = Files.insert_new_file(
@@ -120,7 +119,7 @@ async def delete_all_files(user=Depends(get_admin_user)):
     result = Files.delete_all_files()
     if result:
         try:
-            Storage.delete_all_files()
+            Storage.delete_all_files(USER_UPLOAD_FOLDER)
         except Exception as e:
             log.exception(e)
             log.error(f"Error deleting files")
@@ -213,21 +212,12 @@ async def get_file_content_by_id(id: str, user=Depends(get_verified_user)):
     file = Files.get_file_by_id(id)
     if file and (file.user_id == user.id or user.role == "admin"):
         try:
-            file_path = Storage.get_file(file.path)
-            file_path = Path(file_path)
-
-            # Check if the file already exists in the cache
-            if file_path.is_file():
-                print(f"file_path: {file_path}")
-                headers = {
-                    "Content-Disposition": f'attachment; filename="{file.meta.get("name", file.filename)}"'
-                }
-                return FileResponse(file_path, headers=headers)
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=ERROR_MESSAGES.NOT_FOUND,
-                )
+            file_content_it = Storage.get_file(file.path)
+            return StreamingResponse(file_content_it, headers={
+                "Content-Disposition": f'attachment; filename="{file.meta.get("name", file.filename)}"'
+            })
+        except HTTPException as e:
+            raise e
         except Exception as e:
             log.exception(e)
             log.error(f"Error getting file content")
@@ -247,18 +237,10 @@ async def get_html_file_content_by_id(id: str, user=Depends(get_verified_user)):
     file = Files.get_file_by_id(id)
     if file and (file.user_id == user.id or user.role == "admin"):
         try:
-            file_path = Storage.get_file(file.path)
-            file_path = Path(file_path)
-
-            # Check if the file already exists in the cache
-            if file_path.is_file():
-                print(f"file_path: {file_path}")
-                return FileResponse(file_path)
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=ERROR_MESSAGES.NOT_FOUND,
-                )
+            file_content_it = Storage.get_file(file.path)
+            return StreamingResponse(file_content_it)
+        except HTTPException as e:
+            raise e
         except Exception as e:
             log.exception(e)
             log.error(f"Error getting file content")
@@ -278,22 +260,20 @@ async def get_file_content_by_id(id: str, user=Depends(get_verified_user)):
     file = Files.get_file_by_id(id)
 
     if file and (file.user_id == user.id or user.role == "admin"):
-        file_path = file.path
-        if file_path:
-            file_path = Storage.get_file(file_path)
-            file_path = Path(file_path)
-
-            # Check if the file already exists in the cache
-            if file_path.is_file():
-                print(f"file_path: {file_path}")
-                headers = {
+        if file.path:
+            try:
+                file_content_it = Storage.get_file(file.path)
+                return StreamingResponse(file_content_it, headers={
                     "Content-Disposition": f'attachment; filename="{file.meta.get("name", file.filename)}"'
-                }
-                return FileResponse(file_path, headers=headers)
-            else:
+                })
+            except HTTPException as e:
+                raise e
+            except Exception as e:
+                log.exception(e)
+                log.error(f"Error getting file content")
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=ERROR_MESSAGES.NOT_FOUND,
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=ERROR_MESSAGES.DEFAULT("Error getting file content"),
                 )
         else:
             # File path doesn’t exist, return the content as .txt if possible
